@@ -1,7 +1,6 @@
 // build.rs
 
 use std::env;
-use std::fs::read_dir;
 use std::fs::File;
 use std::io;
 use std::path;
@@ -10,13 +9,6 @@ use std::process;
 use std::process::ExitStatus;
 
 use nix::fcntl;
-
-fn emit_rerun_directives_for_contents(dir: &Path) {
-    for result in read_dir(dir).unwrap() {
-        let file = result.unwrap();
-        println!("cargo:rerun-if-changed={}", file.path().display());
-    }
-}
 
 #[cfg(feature = "bindgen")]
 fn generate_bindings(src_dir: path::PathBuf) {
@@ -176,34 +168,38 @@ fn main() {
         (None, vec![])
     };
 
-    if vendored_zlib {
+    if vendored_zlib || static_zlib {
         make_zlib(compiler.as_ref().unwrap(), &src_dir);
+    } else {
+        println!(
+            "cargo:rustc-link-lib={}z",
+            if static_zlib { "static=" } else { "" }
+        );
     }
 
-    if vendored_libelf {
+    if vendored_libelf || static_libelf {
         make_elfutils(compiler.as_ref().unwrap(), &src_dir);
+    } else {
+        println!(
+            "cargo:rustc-link-lib={}elf",
+            if static_libelf { "static=" } else { "" }
+        );
     }
 
-    if vendored_libbpf {
+    if vendored_libbpf || static_libbpf {
         make_libbpf(compiler.as_ref().unwrap(), cflags.as_slice(), &src_dir);
+    } else {
+        println!(
+            "cargo:rustc-link-lib={}bpf",
+            if static_libbpf { "static=" } else { "" }
+        );
     }
 
     println!(
         "cargo:rustc-link-search=native={}",
         out_dir.to_string_lossy()
     );
-    println!(
-        "cargo:rustc-link-lib={}elf",
-        if static_libelf { "static=" } else { "" }
-    );
-    println!(
-        "cargo:rustc-link-lib={}z",
-        if static_zlib { "static=" } else { "" }
-    );
-    println!(
-        "cargo:rustc-link-lib={}bpf",
-        if static_libbpf { "static=" } else { "" }
-    );
+
     println!("cargo:include={}/include", out_dir.to_string_lossy());
 
     println!("cargo:rerun-if-env-changed=LIBBPF_SYS_LIBRARY_PATH");
@@ -288,9 +284,11 @@ fn make_zlib(compiler: &cc::Tool, src_dir: &path::Path) {
         }
     }
 
-    builder.flag_if_supported("-w").warnings(false).compile("z");
-
-    emit_rerun_directives_for_contents(&src_dir);
+    builder
+        .flag_if_supported("-w")
+        .warnings(false)
+        .emit_rerun_if_env_changed(true)
+        .compile("z");
 }
 
 fn make_elfutils(compiler: &cc::Tool, src_dir: &path::Path) {
@@ -380,9 +378,8 @@ fn make_elfutils(compiler: &cc::Tool, src_dir: &path::Path) {
     builder
         .flag_if_supported("-w")
         .warnings(false)
+        .emit_rerun_if_env_changed(true)
         .compile("elf");
-
-    emit_rerun_directives_for_contents(&src_dir.join("elfutils").join("src"));
 }
 
 fn make_libbpf(compiler: &cc::Tool, flags: &[String], src_dir: &path::Path) {
@@ -432,9 +429,8 @@ fn make_libbpf(compiler: &cc::Tool, flags: &[String], src_dir: &path::Path) {
     builder
         .flag_if_supported("-w")
         .warnings(false)
+        .emit_rerun_if_env_changed(true)
         .compile("bpf");
-
-    emit_rerun_directives_for_contents(&src_dir);
 }
 
 fn build_android() -> bool {
