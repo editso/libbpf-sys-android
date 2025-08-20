@@ -2,6 +2,8 @@
 
 use std::env;
 use std::fs::read_dir;
+use std::fs::File;
+use std::io;
 use std::path;
 use std::path::Path;
 use std::process;
@@ -55,6 +57,7 @@ fn generate_bindings(src_dir: path::PathBuf) {
         &path::PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR should always be set"));
 
     bindgen::Builder::default()
+        .rust_target(env!("CARGO_PKG_RUST_VERSION").parse().expect("valid"))
         .derive_default(true)
         .explicit_padding(true)
         .default_enum_style(bindgen::EnumVariation::Consts)
@@ -67,6 +70,7 @@ fn generate_bindings(src_dir: path::PathBuf) {
         .allowlist_function("btf_.+")
         .allowlist_function("libbpf_.+")
         .allowlist_function("perf_.+")
+        .allowlist_function("ring__.+")
         .allowlist_function("ring_buffer_.+")
         .allowlist_function("user_ring_buffer_.+")
         .allowlist_type("bpf_.+")
@@ -212,13 +216,32 @@ fn main() {
     }
 }
 
+fn open_lockable(path: &Path) -> io::Result<File> {
+    let result = File::options()
+        .read(true)
+        // Open with write permissions because flock(2) may require them
+        // on some platforms.
+        .write(true)
+        .open(path);
+    match result {
+        Ok(file) => Ok(file),
+        Err(err) if err.kind() == io::ErrorKind::PermissionDenied => {
+            // On a read-only file system we may not be able to open
+            // with write permissions. So just open for reading and hope
+            // for the best.
+            File::open(path)
+        }
+        e @ Err(..) => e,
+    }
+}
+
 fn make_zlib(compiler: &cc::Tool, src_dir: &path::Path) {
+    let project_dir = src_dir.join("zlib");
+    let src_dir = src_dir.join("zlib");
     // lock README such that if two crates are trying to compile
     // this at the same time (eg libbpf-rs libbpf-cargo)
     // they wont trample each other
-    let project_dir = src_dir.join("zlib");
-
-    let file = std::fs::File::open(project_dir.join("README")).unwrap();
+    let file = open_lockable(&src_dir.join("README")).unwrap();
     let _lock = fcntl::Flock::lock(file, fcntl::FlockArg::LockExclusive).unwrap();
 
     let project_dir = project_dir.to_str().unwrap();
@@ -243,11 +266,7 @@ fn make_zlib(compiler: &cc::Tool, src_dir: &path::Path) {
 
     // These flags are only used in Android
     // ref: https://android.googlesource.com/platform/external/zlib/+/refs/tags/android-11.0.0_r48/Android.bp
-    let android_cflags = [
-        "-O3",
-        "-DHAVE_HIDDEN",
-        "-DZLIB_CONST",
-    ];
+    let android_cflags = ["-O3", "-DHAVE_HIDDEN", "-DZLIB_CONST"];
 
     configure(project_dir, vec![]);
 
@@ -278,10 +297,10 @@ fn make_elfutils(compiler: &cc::Tool, src_dir: &path::Path) {
     // lock README such that if two crates are trying to compile
     // this at the same time (eg libbpf-rs libbpf-cargo)
     // they wont trample each other
-    let project_dir = src_dir.join("elfutils");
-
-    let file = std::fs::File::open(project_dir.join("README")).unwrap();
+    let file = std::fs::File::open(src_dir.join("elfutils/README")).unwrap();
     let _lock = fcntl::Flock::lock(file, fcntl::FlockArg::LockExclusive).unwrap();
+
+    let project_dir = src_dir.join("elfutils");
 
     let libelf_dir = project_dir.join("libelf");
     let project_dir = project_dir.to_str().unwrap();
