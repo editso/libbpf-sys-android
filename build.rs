@@ -297,7 +297,7 @@ fn make_elfutils(compiler: &cc::Tool, src_dir: &path::Path) {
     // lock README such that if two crates are trying to compile
     // this at the same time (eg libbpf-rs libbpf-cargo)
     // they wont trample each other
-    let file = std::fs::File::open(src_dir.join("elfutils/README")).unwrap();
+    let file = open_lockable(&src_dir.join("elfutils/README")).unwrap();
     let _lock = fcntl::Flock::lock(file, fcntl::FlockArg::LockExclusive).unwrap();
 
     let project_dir = src_dir.join("elfutils");
